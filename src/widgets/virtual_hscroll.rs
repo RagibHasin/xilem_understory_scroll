@@ -60,6 +60,8 @@ pub struct VirtualHScroll {
     anchor_index: usize,
     range_in_viewport: Range<usize>,
 
+    start_at: f64,
+    end_at: f64,
     left_to_right: bool,
 
     autoscroll_velocity: f64,
@@ -72,11 +74,14 @@ pub struct VirtualHScroll {
 impl std::fmt::Debug for VirtualHScroll {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VirtualHScroll")
-            .field("virtual_list", &self.virtual_list).field("active_range", &self.active_range)
+            .field("virtual_list", &self.virtual_list)
+            .field("active_range", &self.active_range)
             .field("action_handled", &self.action_handled)
             .field("items", &self.items.keys().collect::<Vec<_>>())
             .field("anchor_index", &self.anchor_index)
             .field("range_in_viewport", &self.range_in_viewport)
+            .field("start_at", &self.start_at)
+            .field("end_at", &self.end_at)
             .field("left_to_right", &self.left_to_right)
             .field("autoscroll_velocity", &self.autoscroll_velocity)
             .field("warned_not_dense", &self.warned_not_dense)
@@ -113,11 +118,10 @@ impl VirtualHScroll {
             items: BTreeMap::default(),
             anchor_index: initial_anchor,
             range_in_viewport: initial_anchor..initial_anchor,
-            // scroll_offset_from_anchor: 0.0,
-            // mean_item_width: DEFAULT_MEAN_ITEM_WIDTH,
+            start_at: 0.,
+            end_at: 1.,
             left_to_right: true,
             autoscroll_velocity: 0.,
-            // anchor_width: DEFAULT_MEAN_ITEM_WIDTH,
             warned_not_dense: false,
         }
     }
@@ -133,6 +137,14 @@ impl VirtualHScroll {
     #[track_caller]
     pub fn with_len(mut self, len: usize) -> Self {
         self.virtual_list.model_mut().set_len(len);
+        self
+    }
+
+    /// Sets the points (as ratios of width) where the first item starts and
+    /// the last item ends in the viewport.
+    pub fn with_start_end(mut self, start_at: f64, end_at: f64) -> Self {
+        self.start_at = start_at;
+        self.end_at = end_at;
         self
     }
 
@@ -330,6 +342,18 @@ impl VirtualHScroll {
     /// Note that other empty ranges are fine, although the exact behaviour hasn't been carefully validated.
     pub fn set_len(this: &mut WidgetMut<'_, Self>, len: usize) {
         this.widget.virtual_list.model_mut().set_len(len);
+        this.ctx.request_layout();
+    }
+
+    /// Sets the point (as ratio of width) where the first item starts in the viewport.
+    pub fn set_start(this: &mut WidgetMut<'_, Self>, start_at: f64) {
+        this.widget.start_at = start_at;
+        this.ctx.request_layout();
+    }
+
+    /// Sets the point (as ratio of width) where the last item ends in the viewport.
+    pub fn set_end(this: &mut WidgetMut<'_, Self>, end_at: f64) {
+        this.widget.end_at = end_at;
         this.ctx.request_layout();
     }
 
@@ -575,8 +599,11 @@ impl Widget for VirtualHScroll {
                 .set_default_extent(total_children_width / total_children_count as f64);
         }
 
-        self.virtual_list.set_viewport_extent(size.width);
-        self.virtual_list.set_overscan(size.width, size.width * 2.);
+        let start_at = self.start_at * size.width;
+        let end_at = self.end_at * size.width;
+        self.virtual_list.set_viewport_extent(end_at - start_at);
+        self.virtual_list
+            .set_overscan(size.width + start_at, size.width * 3. - end_at);
 
         let offset_of_anchor = self.virtual_list.model_mut().offset_at(self.anchor_index);
         self.virtual_list
@@ -592,10 +619,12 @@ impl Widget for VirtualHScroll {
         let active_range =
             self.virtual_list.visible_strip().start..self.virtual_list.visible_strip().end;
         if self.active_range != active_range {
-            ctx.submit_action::<VirtualHScrollAction>(VirtualHScrollAction::Fetch(VirtualHScrollFetchAction {
-                old_active: self.active_range.clone(),
-                target: active_range.clone(),
-            }));
+            ctx.submit_action::<VirtualHScrollAction>(VirtualHScrollAction::Fetch(
+                VirtualHScrollFetchAction {
+                    old_active: self.active_range.clone(),
+                    target: active_range.clone(),
+                },
+            ));
             self.action_handled = false;
         }
 
@@ -617,12 +646,13 @@ impl Widget for VirtualHScroll {
     }
 
     fn compose(&mut self, ctx: &mut ComposeCtx<'_>) {
-        let x = self.scroll_offset_from_anchor();
+        let content_width = ctx.content_box_size().width;
+        let x = self.scroll_offset_from_anchor() - self.start_at * content_width;
         let x = -self.direction_appropriate(x)
             + if self.left_to_right {
                 0.
             } else {
-                ctx.content_box_size().width
+                content_width
             };
         let translation = Vec2::new(x, 0.);
         for idx in self.active_range.clone() {
@@ -645,9 +675,11 @@ impl Widget for VirtualHScroll {
             let new_range_in_viewport = anchor_index..last_visible_index;
             if self.range_in_viewport != new_range_in_viewport.clone() {
                 self.range_in_viewport = new_range_in_viewport.clone();
-                ctx.submit_action::<VirtualHScrollAction>(VirtualHScrollAction::Scroll(VirtualHScrollScrollAction {
-                    range_in_viewport: new_range_in_viewport,
-                }));
+                ctx.submit_action::<VirtualHScrollAction>(VirtualHScrollAction::Scroll(
+                    VirtualHScrollScrollAction {
+                        range_in_viewport: new_range_in_viewport,
+                    },
+                ));
             }
         }
     }

@@ -21,6 +21,8 @@ pub struct VirtualHScroll<State, Action, ChildrenViews, F, G> {
     func: F,
     anchor_index: Option<usize>,
     len: usize,
+    start_at: f64,
+    end_at: f64,
     left_to_right: bool,
     autoscroll_velocity: f64,
     on_scroll: G,
@@ -73,6 +75,8 @@ where
         func,
         anchor_index: None,
         len,
+        start_at: 0.,
+        end_at: 1.,
         left_to_right: true,
         autoscroll_velocity: 0.,
         on_scroll: private::do_nothing::<State, Action>,
@@ -106,6 +110,8 @@ where
         func,
         anchor_index: None,
         len: usize::MAX,
+        start_at: 0.,
+        end_at: 1.,
         left_to_right: true,
         autoscroll_velocity: 0.,
         on_scroll: private::do_nothing::<State, Action>,
@@ -118,6 +124,13 @@ impl<State, Action, ChildrenViews, F, G> VirtualHScroll<State, Action, ChildrenV
         self
     }
 
+    /// Sets the points (as ratios of width) where the first item starts and
+    /// the last item ends in the viewport.
+    pub fn start_end(mut self, start_at: f64, end_at: f64) -> Self {
+        self.start_at = start_at;
+        self.end_at = end_at;
+        self
+    }
     pub fn left_to_right(mut self, left_to_right: bool) -> Self {
         self.left_to_right = left_to_right;
         self
@@ -134,6 +147,8 @@ impl<State, Action, ChildrenViews, F, G> VirtualHScroll<State, Action, ChildrenV
             func: self.func,
             anchor_index: self.anchor_index,
             len: self.len,
+            start_at: self.start_at,
+            end_at: self.end_at,
             left_to_right: self.left_to_right,
             autoscroll_velocity: self.autoscroll_velocity,
             on_scroll,
@@ -200,6 +215,7 @@ where
         // Setting that seems like an imperative action?
         let pod = Pod::new(
             widgets::VirtualHScroll::new(self.anchor_index.unwrap_or(0), self.len)
+                .with_start_end(self.start_at, self.end_at)
                 .with_direction(self.left_to_right)
                 .with_autoscroll_velocity(self.autoscroll_velocity),
         );
@@ -230,6 +246,16 @@ where
         let len_changed = self.len != prev.len;
         if len_changed {
             widgets::VirtualHScroll::set_len(&mut element, self.len);
+        }
+
+        let start_at = self.start_at != prev.start_at;
+        if start_at {
+            widgets::VirtualHScroll::set_start(&mut element, self.start_at);
+        }
+
+        let end_at = self.end_at != prev.end_at;
+        if end_at {
+            widgets::VirtualHScroll::set_end(&mut element, self.end_at);
         }
 
         let direction_changed = self.left_to_right != prev.left_to_right;

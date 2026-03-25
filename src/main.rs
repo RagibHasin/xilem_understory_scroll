@@ -21,6 +21,7 @@ fn app_logic(state: &mut AppState) -> impl WidgetView<AppState> + use<> {
                     AlphaColor::<Oklch>::new([0.5, 0.8, idx as f32 * 2., 1.]).convert(),
                 )
         })
+        .start_end(0.5, 0.5)
         .left_to_right(false)
         .autoscroll_velocity(10.)
         .on_scroll(|state: &mut AppState, range| {
