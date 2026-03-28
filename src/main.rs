@@ -13,7 +13,7 @@ struct AppState {
 
 fn app_logic(state: &mut AppState) -> impl WidgetView<AppState> + use<> {
     flex_col((
-        virtual_hscroll(99, |_: &mut AppState, idx| {
+        virtual_hscroll(100, |_: &mut AppState, idx| {
             label(idx.to_string())
                 .width(Length::px(51.))
                 .border(GRAY, 1.)

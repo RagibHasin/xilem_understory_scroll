@@ -3384,7 +3384,7 @@ dependencies = [
 [[package]]
 name = "understory_virtual_list"
 version = "0.1.0"
-source = "git+https://github.com/endoli/understory.git?rev=a852be029f737fae02316e855f92db4db291e7d3#a852be029f737fae02316e855f92db4db291e7d3"
+source = "git+https://github.com/endoli/understory.git?rev=edf6807b349a5a2cf6291a45dd492ce81384c89e#edf6807b349a5a2cf6291a45dd492ce81384c89e"
 
 [[package]]
 name = "unicode-bidi"

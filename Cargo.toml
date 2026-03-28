@@ -10,7 +10,7 @@ color = "0.3.2"
 masonry = { git = "https://github.com/linebender/xilem.git", rev = "007d652e88366637ae72e690cee04aa661b98998", version = "0.4.0" }
 masonry_winit = { git = "https://github.com/linebender/xilem.git", rev = "007d652e88366637ae72e690cee04aa661b98998", version = "0.4.0" }
 tracing = "0.1.44"
-understory_virtual_list = { git = "https://github.com/endoli/understory.git", rev = "a852be029f737fae02316e855f92db4db291e7d3", version = "0.1.0" }
+understory_virtual_list = { git = "https://github.com/endoli/understory.git", rev = "edf6807b349a5a2cf6291a45dd492ce81384c89e", version = "0.1.0" }
 xilem = { git = "https://github.com/linebender/xilem.git", rev = "007d652e88366637ae72e690cee04aa661b98998", version = "0.4.0" }
 
 [dev-dependencies]

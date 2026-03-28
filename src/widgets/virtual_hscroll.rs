@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use understory_virtual_list::{ScrollAlign, VirtualList};
+use understory_virtual_list::{ScrollAlign, SparsePrefixSumExtentModel, VirtualList};
 
 use xilem::dpi::PhysicalPosition;
 
@@ -19,8 +19,6 @@ use masonry::core::{
 use masonry::kurbo::{Axis, Point, Size, Vec2};
 use masonry::layout::{LenDef, LenReq, SizeDef};
 use masonry::util::debug_panic;
-
-mod sparse;
 
 #[derive(Debug)]
 pub struct VirtualHScrollFetchAction {
@@ -48,7 +46,7 @@ pub enum VirtualHScrollAction {
 }
 
 pub struct VirtualHScroll {
-    virtual_list: VirtualList<sparse::SparsePrefixSumExtentModel<f64>>,
+    virtual_list: VirtualList<SparsePrefixSumExtentModel<f64>>,
 
     active_range: Range<usize>,
 
@@ -104,7 +102,7 @@ impl VirtualHScroll {
     /// not yet been determined.
     pub fn new(initial_anchor: usize, len: usize) -> Self {
         let mut virtual_list = VirtualList::new(
-            sparse::SparsePrefixSumExtentModel::new(DEFAULT_MEAN_ITEM_WIDTH, len),
+            SparsePrefixSumExtentModel::new(DEFAULT_MEAN_ITEM_WIDTH, len),
             0.,
             0.,
         );
