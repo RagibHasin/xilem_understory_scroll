@@ -6,7 +6,6 @@ license = "Apache-2.0"
 
 [dependencies]
 accesskit = "0.21.1"
-color = "0.3.2"
 masonry = { git = "https://github.com/linebender/xilem.git", rev = "007d652e88366637ae72e690cee04aa661b98998", version = "0.4.0" }
 masonry_winit = { git = "https://github.com/linebender/xilem.git", rev = "007d652e88366637ae72e690cee04aa661b98998", version = "0.4.0" }
 tracing = "0.1.44"
@@ -14,6 +13,7 @@ understory_virtual_list = { git = "https://github.com/endoli/understory.git", re
 xilem = { git = "https://github.com/linebender/xilem.git", rev = "007d652e88366637ae72e690cee04aa661b98998", version = "0.4.0" }
 
 [dev-dependencies]
+color = "0.3.2"
 masonry = { git = "https://github.com/linebender/xilem.git", rev = "007d652e88366637ae72e690cee04aa661b98998", version = "0.4.0", features = [
   "testing"
 ] }
