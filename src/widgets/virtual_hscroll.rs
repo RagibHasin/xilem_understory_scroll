@@ -10,6 +10,7 @@ use understory_virtual_list::{ScrollAlign, SparsePrefixSumExtentModel, VirtualLi
 
 use xilem::dpi::PhysicalPosition;
 
+use masonry::accesskit;
 use masonry::core::keyboard::{Key, KeyState, NamedKey};
 use masonry::core::{
     AccessCtx, AccessEvent, ChildrenIds, ComposeCtx, EventCtx, KeyboardEvent, LayoutCtx,
@@ -686,7 +687,7 @@ impl Widget for VirtualHScroll {
         &mut self,
         _ctx: &mut PaintCtx<'_>,
         _props: &PropertiesRef<'_>,
-        _scene: &mut xilem::vello::Scene,
+        _painter: &mut masonry::imaging::Painter<'_>,
     ) {
         // We run these checks in `paint` as they are outside of the pass-based fixedpoint loop
         if !self.action_handled {
