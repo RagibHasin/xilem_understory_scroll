@@ -10,7 +10,6 @@ use understory_virtual_list::{ScrollAlign, SparsePrefixSumExtentModel, VirtualLi
 
 use xilem::dpi::PhysicalPosition;
 
-use masonry::accesskit;
 use masonry::core::keyboard::{Key, KeyState, NamedKey};
 use masonry::core::{
     AccessCtx, AccessEvent, ChildrenIds, ComposeCtx, EventCtx, KeyboardEvent, LayoutCtx,
@@ -20,6 +19,7 @@ use masonry::core::{
 use masonry::kurbo::{Axis, Point, Size, Vec2};
 use masonry::layout::{LenDef, LenReq, SizeDef};
 use masonry::util::debug_panic;
+use masonry::{accesskit, layout::Length};
 
 #[derive(Debug)]
 pub struct VirtualHScrollFetchAction {
@@ -396,8 +396,6 @@ impl Widget for VirtualHScroll {
     ) {
         if let PointerEvent::Scroll(PointerScrollEvent { delta, .. }) = event {
             let size = ctx.content_box_size();
-            // TODO - Remove reference to scale factor.
-            // See https://github.com/linebender/xilem/issues/1264
             let scale_factor = ctx.get_scale_factor();
             let line_px = PhysicalPosition {
                 x: 120.0 * scale_factor,
@@ -534,7 +532,6 @@ impl Widget for VirtualHScroll {
     }
 
     fn register_children(&mut self, ctx: &mut RegisterCtx<'_>) {
-        // TODO: Register in id order
         for child in self.items.values_mut() {
             ctx.register_child(child);
         }
@@ -558,16 +555,12 @@ impl Widget for VirtualHScroll {
         _props: &PropertiesRef<'_>,
         _axis: Axis,
         len_req: LenReq,
-        _cross_length: Option<f64>,
-    ) -> f64 {
-        const DEFAULT_LENGTH: f64 = 100.;
-
-        // TODO: Remove HACK: Until scale factor rework happens, just pretend it's always 1.0.
-        //       https://github.com/linebender/xilem/issues/1264
-        let scale = 1.0;
+        _cross_length: Option<Length>,
+    ) -> Length {
+        const DEFAULT_LENGTH: Length = Length::const_px(100.);
 
         match len_req {
-            LenReq::MinContent | LenReq::MaxContent => DEFAULT_LENGTH * scale,
+            LenReq::MinContent | LenReq::MaxContent => DEFAULT_LENGTH,
             LenReq::FitContent(space) => space,
         }
     }

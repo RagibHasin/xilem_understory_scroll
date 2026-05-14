@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use color::{AlphaColor, Oklch, palette::css::GRAY};
-use masonry::layout::Length;
+use masonry::layout::{AsUnit, Length};
 use xilem::{EventLoop, WidgetView, WindowOptions, Xilem, style::Style, view::label};
 use xilem::{view::flex_col, winit::error::EventLoopError};
 
@@ -16,7 +16,7 @@ fn app_logic(state: &mut AppState) -> impl WidgetView<AppState> + use<> {
         virtual_hscroll(100, |_: &mut AppState, idx| {
             label(idx.to_string())
                 .width(Length::px(51.))
-                .border(GRAY, 1.)
+                .border(GRAY, 1.px())
                 .background_color(
                     AlphaColor::<Oklch>::new([0.5, 0.8, idx as f32 * 2., 1.]).convert(),
                 )
