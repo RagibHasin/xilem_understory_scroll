@@ -3609,7 +3609,8 @@ dependencies = [
 [[package]]
 name = "understory_virtual_list"
 version = "0.1.0"
-source = "git+https://github.com/endoli/understory.git?rev=396a45f6f0a752d3c67ebd6954835b4d7484a966#396a45f6f0a752d3c67ebd6954835b4d7484a966"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b2b0c6a51403c4a484e3f0f3cec16458d2ab8ce8dd9d060fa4e887b4afef17d"
 
 [[package]]
 name = "unicode-bidi"
