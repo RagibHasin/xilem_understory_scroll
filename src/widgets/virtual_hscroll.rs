@@ -16,7 +16,7 @@ use masonry::core::{
     MeasureCtx, NewWidget, PaintCtx, PointerEvent, PointerScrollEvent, PropertiesMut,
     PropertiesRef, RegisterCtx, TextEvent, Update, UpdateCtx, Widget, WidgetMut, WidgetPod,
 };
-use masonry::kurbo::{Axis, Point, Size, Vec2};
+use masonry::kurbo::{Axis, Size};
 use masonry::layout::{LenDef, LenReq, SizeDef};
 use masonry::util::debug_panic;
 use masonry::{accesskit, layout::Length};
@@ -46,6 +46,14 @@ pub enum VirtualHScrollAction {
     Scroll(VirtualHScrollScrollAction),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollDirection {
+    TopToBottom,
+    BottomToTop,
+    LeftToRight,
+    RightToLeft,
+}
+
 pub struct VirtualHScroll {
     virtual_list: VirtualList<SparsePrefixSumExtentModel<f64>>,
 
@@ -55,15 +63,14 @@ pub struct VirtualHScroll {
 
     items: BTreeMap<usize, WidgetPod<dyn Widget>>,
 
-    // focused_item: Option<(usize, WidgetPod<dyn Widget>)>,
     anchor_index: usize,
     range_in_viewport: Range<usize>,
 
     start_at: f64,
     end_at: f64,
-    left_to_right: bool,
+    direction: ScrollDirection,
 
-    autoscroll_velocity: f64,
+    scrolling: bool,
 
     warned_not_dense: bool,
 
@@ -81,15 +88,15 @@ impl std::fmt::Debug for VirtualHScroll {
             .field("range_in_viewport", &self.range_in_viewport)
             .field("start_at", &self.start_at)
             .field("end_at", &self.end_at)
-            .field("left_to_right", &self.left_to_right)
-            .field("autoscroll_velocity", &self.autoscroll_velocity)
+            .field("direction", &self.direction)
+            .field("scrolling", &self.scrolling)
             .field("warned_not_dense", &self.warned_not_dense)
             .field("missed_actions_count", &self.missed_actions_count)
             .finish()
     }
 }
 
-const DEFAULT_MEAN_ITEM_WIDTH: f64 = 180.;
+const DEFAULT_MEAN_ITEM_LENGTH: f64 = 180.;
 
 // --- MARK: BUILDERS
 impl VirtualHScroll {
@@ -103,11 +110,11 @@ impl VirtualHScroll {
     /// not yet been determined.
     pub fn new(initial_anchor: usize, len: usize) -> Self {
         let mut virtual_list = VirtualList::new(
-            SparsePrefixSumExtentModel::new(DEFAULT_MEAN_ITEM_WIDTH, len),
+            SparsePrefixSumExtentModel::new(DEFAULT_MEAN_ITEM_LENGTH, len),
             0.,
             0.,
         );
-        virtual_list.scroll_to_index(initial_anchor, ScrollAlign::Nearest);
+        virtual_list.scroll_to_index(initial_anchor, ScrollAlign::Start);
         Self {
             virtual_list,
             // This range starts intentionally empty, as no items have been loaded.
@@ -119,27 +126,20 @@ impl VirtualHScroll {
             range_in_viewport: initial_anchor..initial_anchor,
             start_at: 0.,
             end_at: 1.,
-            left_to_right: true,
-            autoscroll_velocity: 0.,
+            direction: ScrollDirection::TopToBottom,
+            scrolling: false,
             warned_not_dense: false,
         }
     }
 
-    /// Sets the range of child ids which are valid.
-    ///
-    /// Note that this is a half-open range, so the end id of the range is not valid.
-    ///
-    /// # Panics
-    ///
-    /// If `valid_range.start >= valid_range.end`.
-    /// Note that other empty ranges are fine, although the exact behaviour hasn't been carefully validated.
+    /// Sets the number of child ids which are valid.
     #[track_caller]
     pub fn with_len(mut self, len: usize) -> Self {
         self.virtual_list.model_mut().set_len(len);
         self
     }
 
-    /// Sets the points (as ratios of width) where the first item starts and
+    /// Sets the points (as ratios of the main-axis length) where the first item starts and
     /// the last item ends in the viewport.
     pub fn with_start_end(mut self, start_at: f64, end_at: f64) -> Self {
         self.start_at = start_at;
@@ -148,14 +148,16 @@ impl VirtualHScroll {
     }
 
     /// Sets the direction in which children are laid out.
-    pub fn with_direction(mut self, left_to_right: bool) -> Self {
-        self.left_to_right = left_to_right;
+    pub fn with_direction(mut self, direction: ScrollDirection) -> Self {
+        self.direction = direction;
         self
     }
 
-    /// Sets the auto-scroll velocity.
-    pub fn with_autoscroll_velocity(mut self, autoscroll_velocity: f64) -> Self {
-        self.autoscroll_velocity = autoscroll_velocity;
+    /// Sets scrolling state.
+    ///
+    /// Adjusts pixel snapping for animations.
+    pub fn with_scrolling(mut self, scrolling: bool) -> Self {
+        self.scrolling = scrolling;
         self
     }
 }
@@ -167,10 +169,16 @@ impl VirtualHScroll {
     /// This is intended for sanity-checking of higher-level processes (i.e. so that inconsistencies can be caught early).
     #[expect(
         clippy::len_without_is_empty,
-        reason = "The only time the VirtualScroll unloads all children is when given an empty valid range."
+        reason = "The only time the VirtualHScroll unloads all children is when given an empty valid range."
     )]
     pub fn len(&self) -> usize {
         self.items.len()
+    }
+
+    /// Scroll by the specified amount of pixels.
+    pub fn scroll_by(&mut self, delta: f64) {
+        self.virtual_list
+            .scroll_by(-self.direction.appropriate(delta));
     }
 
     /// Ensures that the correct follow-up passes are requested after the scroll position changes.
@@ -211,13 +219,27 @@ impl VirtualHScroll {
         ctx.request_compose();
     }
 
-    fn direction_appropriate(&self, delta: f64) -> f64 {
-        if self.left_to_right { delta } else { -delta }
-    }
-
     fn scroll_offset_from_anchor(&mut self) -> f64 {
         self.virtual_list.scroll_offset()
             - self.virtual_list.model_mut().offset_at(self.anchor_index)
+    }
+}
+
+// -- MARK: IMPL OTHERS
+impl ScrollDirection {
+    fn axis(self) -> Axis {
+        match self {
+            Self::TopToBottom | Self::BottomToTop => Axis::Vertical,
+            Self::LeftToRight | Self::RightToLeft => Axis::Horizontal,
+        }
+    }
+
+    fn is_reverse(self) -> bool {
+        matches!(self, Self::BottomToTop | Self::RightToLeft)
+    }
+
+    fn appropriate(self, delta: f64) -> f64 {
+        if self.is_reverse() { -delta } else { delta }
     }
 }
 
@@ -230,11 +252,11 @@ enum PostScrollResult {
 impl VirtualHScroll {
     /// Indicates that `action` is about to be handled by the driver (which is calling this method).
     ///
-    /// This is required because if multiple actions stack up, `VirtualScroll` would assume that they have all been handled.
+    /// This is required because if multiple actions stack up, `VirtualHScroll` would assume that they have all been handled.
     /// In particular, this method existing allows layout operations to happen after each individual action is handled, which
     /// achieves several things:
     /// - It improves robustness, by allowing layout methods to know exactly which indices are valid.
-    /// - It makes writing drivers easier, as the safety rails in `VirtualScroll` can be more precise.
+    /// - It makes writing drivers easier, as the safety rails in `VirtualHScroll` can be more precise.
     // (It also simplifies writing tests)
     // TODO: This could instead take ownership of the action, and return some kind of `{to_remove, to_add}` iterator index pair.
     pub fn will_handle_action(this: &mut WidgetMut<'_, Self>, action: &VirtualHScrollFetchAction) {
@@ -258,7 +280,7 @@ impl VirtualHScroll {
 
     /// Add the child widget for the given index.
     ///
-    /// This should be done only in the handling of a [`VirtualScrollAction`].
+    /// This should be done only in the handling of a [`VirtualHScrollAction`].
     /// This must be called after [`VirtualHScroll::will_handle_action`].
     #[track_caller]
     pub fn add_child(this: &mut WidgetMut<'_, Self>, idx: usize, child: NewWidget<dyn Widget>) {
@@ -273,7 +295,7 @@ impl VirtualHScroll {
         );
         this.ctx.children_changed();
         if this.widget.items.insert(idx, child.to_pod()).is_some() {
-            tracing::warn!("Tried to add child {idx} twice to VirtualScroll");
+            tracing::warn!("Tried to add child {idx} twice to VirtualHScroll");
         };
     }
 
@@ -282,7 +304,7 @@ impl VirtualHScroll {
     /// This will log an error if there was no child at the given index.
     /// This should only happen if the driver does not meet the usage contract.
     ///
-    /// This should be done only in the handling of a [`VirtualScrollAction`].
+    /// This should be done only in the handling of a [`VirtualHScrollAction`].
     /// This must be called after [`VirtualHScroll::will_handle_action`].
     ///
     /// Note that if you are changing the valid range, you should *not* remove any active children
@@ -344,28 +366,30 @@ impl VirtualHScroll {
         this.ctx.request_layout();
     }
 
-    /// Sets the point (as ratio of width) where the first item starts in the viewport.
+    /// Sets the point (as ratio of the main-axis length) where the first item starts in the viewport.
     pub fn set_start(this: &mut WidgetMut<'_, Self>, start_at: f64) {
         this.widget.start_at = start_at;
         this.ctx.request_layout();
     }
 
-    /// Sets the point (as ratio of width) where the last item ends in the viewport.
+    /// Sets the point (as ratio of the main-axis length) where the last item ends in the viewport.
     pub fn set_end(this: &mut WidgetMut<'_, Self>, end_at: f64) {
         this.widget.end_at = end_at;
         this.ctx.request_layout();
     }
 
     /// Sets the direction in which children are laid out.
-    pub fn set_direction(this: &mut WidgetMut<'_, Self>, left_to_right: bool) {
-        this.widget.left_to_right = left_to_right;
+    pub fn set_direction(this: &mut WidgetMut<'_, Self>, direction: ScrollDirection) {
+        this.widget.direction = direction;
         this.ctx.request_layout();
     }
 
-    /// Sets the auto-scroll velocity.
-    pub fn set_autoscroll_velocity(this: &mut WidgetMut<'_, Self>, autoscroll_velocity: f64) {
-        this.widget.autoscroll_velocity = autoscroll_velocity;
-        this.ctx.request_anim_frame();
+    /// Sets scrolling state.
+    ///
+    /// Adjusts pixel snapping for animations.
+    pub fn set_scrolling(this: &mut WidgetMut<'_, Self>, scrolling: bool) {
+        this.widget.scrolling = scrolling;
+        this.ctx.request_layout();
     }
 
     /// Forcefully aligns the top of the item at `idx` with the top of the
@@ -406,15 +430,14 @@ impl Widget for VirtualHScroll {
                 y: size.height * scale_factor,
             };
 
-            let delta_px = delta.to_pixel_delta(line_px, page_px);
-            let logical_delta_px = delta_px.to_logical::<f64>(scale_factor);
-            let delta = -if logical_delta_px.x != 0. {
-                logical_delta_px.x
-            } else {
-                logical_delta_px.y
+            let delta_px = delta
+                .to_pixel_delta(line_px, page_px)
+                .to_logical::<f64>(scale_factor);
+            let delta = -match (self.direction.axis(), delta_px.x == 0., delta_px.y == 0.) {
+                (Axis::Horizontal, false, _) | (Axis::Vertical, _, true) => delta_px.x,
+                (Axis::Horizontal, true, _) | (Axis::Vertical, _, false) => delta_px.y,
             };
-            self.virtual_list
-                .scroll_by(self.direction_appropriate(delta));
+            self.scroll_by(-delta);
             self.event_post_scroll(ctx);
         }
     }
@@ -434,50 +457,37 @@ impl Widget for VirtualHScroll {
 
         // To get to this state, you currently need to press "tab" to focus this widget in the
         // example.
-        let TextEvent::Keyboard(keyboard_event) = event else {
+        let TextEvent::Keyboard(KeyboardEvent {
+            state: KeyState::Down,
+            key: Key::Named(key),
+            ..
+        }) = event
+        else {
             return;
         };
 
-        match keyboard_event {
-            KeyboardEvent {
-                state: KeyState::Down,
-                key: Key::Named(NamedKey::PageDown),
-                ..
-            } => {
-                self.virtual_list.scroll_by(DELTA_PAGE);
-                self.event_post_scroll(ctx);
-                ctx.set_handled();
-            }
-            KeyboardEvent {
-                state: KeyState::Down,
-                key: Key::Named(NamedKey::PageUp),
-                ..
-            } => {
-                self.virtual_list.scroll_by(-DELTA_PAGE);
-                self.event_post_scroll(ctx);
-                ctx.set_handled();
-            }
-            KeyboardEvent {
-                state: KeyState::Down,
-                key: Key::Named(NamedKey::ArrowLeft),
-                ..
-            } => {
-                self.virtual_list
-                    .scroll_by(self.direction_appropriate(DELTA_LINE));
-                self.event_post_scroll(ctx);
-                ctx.set_handled();
-            }
-            KeyboardEvent {
-                state: KeyState::Down,
-                key: Key::Named(NamedKey::ArrowRight),
-                ..
-            } => {
-                self.virtual_list
-                    .scroll_by(-self.direction_appropriate(DELTA_LINE));
-                self.event_post_scroll(ctx);
-                ctx.set_handled();
-            }
-            _ => {}
+        // For vertical layouts, PageDown/ArrowDown scroll forward and PageUp/ArrowUp scroll back.
+        // For horizontal layouts, PageDown/ArrowRight scroll forward and PageUp/ArrowLeft scroll back.
+        // In both cases "forward" means increasing scroll offset (towards end of list).
+        // For BottomToTop and RightToLeft, direction.appropriate() negates the delta so that
+        // the arrow key which moves visually "forward" still increases the scroll offset correctly.
+        let delta = match (key, self.direction.axis()) {
+            (NamedKey::PageDown, _) => Some((DELTA_PAGE, true)),
+            (NamedKey::PageUp, _) => Some((-DELTA_PAGE, true)),
+            (NamedKey::ArrowDown, Axis::Vertical) => Some((DELTA_LINE, false)),
+            (NamedKey::ArrowUp, Axis::Vertical) => Some((-DELTA_LINE, false)),
+            (NamedKey::ArrowLeft, Axis::Horizontal) => Some((DELTA_LINE, false)),
+            (NamedKey::ArrowRight, Axis::Horizontal) => Some((-DELTA_LINE, false)),
+            _ => None,
+        };
+        if let Some((delta, direct)) = delta {
+            self.virtual_list.scroll_by(if direct {
+                delta
+            } else {
+                self.direction.appropriate(delta)
+            });
+            self.event_post_scroll(ctx);
+            ctx.set_handled();
         }
     }
 
@@ -487,48 +497,22 @@ impl Widget for VirtualHScroll {
         _props: &mut PropertiesMut<'_>,
         event: &AccessEvent,
     ) {
-        if matches!(
-            event.action,
-            accesskit::Action::ScrollLeft | accesskit::Action::ScrollRight
-        ) {
-            let unit = if let Some(accesskit::ActionData::ScrollUnit(unit)) = &event.data {
-                *unit
-            } else {
-                accesskit::ScrollUnit::Item
-            };
-            let amount = match unit {
-                accesskit::ScrollUnit::Item => {
-                    self.virtual_list.model().extent_at(self.anchor_index)
-                }
-                accesskit::ScrollUnit::Page => ctx.content_box_size().width,
-            };
-            if event.action == accesskit::Action::ScrollLeft {
-                self.virtual_list
-                    .scroll_by(-self.direction_appropriate(amount));
-            } else {
-                self.virtual_list
-                    .scroll_by(self.direction_appropriate(amount));
+        let backscroll = match event.action {
+            accesskit::Action::ScrollLeft | accesskit::Action::ScrollUp => true,
+            accesskit::Action::ScrollRight | accesskit::Action::ScrollDown => false,
+            _ => return,
+        };
+
+        let delta = match event.data {
+            Some(accesskit::ActionData::ScrollUnit(accesskit::ScrollUnit::Page)) => {
+                ctx.content_box_size().get_coord(self.direction.axis())
             }
-            self.event_post_scroll(ctx);
-            ctx.set_handled();
-        }
-    }
+            _ => self.virtual_list.model().extent_at(self.anchor_index),
+        };
 
-    fn on_anim_frame(
-        &mut self,
-        ctx: &mut UpdateCtx<'_>,
-        _props: &mut PropertiesMut<'_>,
-        interval: u64,
-    ) {
-        if self.autoscroll_velocity == 0. {
-            return;
-        }
-
-        let delta = interval as f64 * 1e-9 * self.autoscroll_velocity;
-        self.virtual_list
-            .scroll_by(-self.direction_appropriate(delta));
-        self.update_post_scroll(ctx);
-        ctx.request_anim_frame();
+        self.scroll_by(if backscroll { delta } else { -delta });
+        self.event_post_scroll(ctx);
+        ctx.set_handled();
     }
 
     fn register_children(&mut self, ctx: &mut RegisterCtx<'_>) {
@@ -539,12 +523,10 @@ impl Widget for VirtualHScroll {
 
     fn update(&mut self, ctx: &mut UpdateCtx<'_>, _props: &mut PropertiesMut<'_>, event: &Update) {
         if let Update::RequestPanToChild(target) = event {
-            let new_pos_x = compute_pan_range(
-                0.0..ctx.content_box_size().width,
-                target.min_x()..target.max_x(),
-            )
-            .start;
-            self.virtual_list.scroll_by(new_pos_x);
+            let content_box_length = ctx.content_box_size().get_coord(self.direction.axis());
+            let target = target.get_coords(self.direction.axis());
+            let new_pos = compute_pan_range(0.0..content_box_length, target).start;
+            self.virtual_list.scroll_by(new_pos);
             self.update_post_scroll(ctx);
         }
     }
@@ -570,32 +552,32 @@ impl Widget for VirtualHScroll {
 
         let offset_of_anchor_re_viewport = self.scroll_offset_from_anchor();
 
-        let mut total_children_width = 0.;
+        let mut total_children_length = 0.;
         let mut total_children_count = 0usize;
         // Calculate the sizes of all children
         self.virtual_list.model_mut().clear();
         for (idx, child) in &mut self.items {
-            let auto_size = SizeDef::fit(size).with_width(LenDef::MaxContent);
+            let auto_size = SizeDef::fit(size).with(self.direction.axis(), LenDef::MaxContent);
             let child_size = ctx.compute_size(child, auto_size, size.into());
             ctx.run_layout(child, child_size);
-            self.virtual_list
-                .model_mut()
-                .set_extent(*idx, child_size.width);
-            total_children_width += child_size.width;
+            let child_length = child_size.get_coord(self.direction.axis());
+            self.virtual_list.model_mut().set_extent(*idx, child_length);
+            total_children_length += child_length;
             total_children_count += 1;
         }
 
-        if total_children_width != 0. && total_children_count != 0 {
+        if total_children_length != 0. && total_children_count != 0 {
             self.virtual_list
                 .model_mut()
-                .set_default_extent(total_children_width / total_children_count as f64);
+                .set_default_extent(total_children_length / total_children_count as f64);
         }
 
-        let start_at = self.start_at * size.width;
-        let end_at = self.end_at * size.width;
+        let main_axis_length = size.get_coord(self.direction.axis());
+        let start_at = self.start_at * main_axis_length;
+        let end_at = self.end_at * main_axis_length;
         self.virtual_list.set_viewport_extent(end_at - start_at);
         self.virtual_list
-            .set_overscan(size.width + start_at, size.width * 3. - end_at);
+            .set_overscan(main_axis_length + start_at, main_axis_length * 3. - end_at);
 
         let offset_of_anchor = self.virtual_list.model_mut().offset_at(self.anchor_index);
         self.virtual_list
@@ -624,13 +606,14 @@ impl Widget for VirtualHScroll {
         let offset_of_anchor = self.virtual_list.model_mut().offset_at(self.anchor_index);
         for (idx, child) in &mut self.items {
             if active_range.contains(idx) {
-                let x = self.virtual_list.model_mut().offset_at(*idx) - offset_of_anchor;
-                let placed_x = if self.left_to_right {
-                    x
+                let pos = self.virtual_list.model_mut().offset_at(*idx) - offset_of_anchor;
+                let placed_pos = if self.direction.is_reverse() {
+                    -pos - self.virtual_list.model().extent_at(*idx)
                 } else {
-                    -x - self.virtual_list.model().extent_at(*idx)
+                    pos
                 };
-                ctx.place_child(child, Point::new(placed_x, 0.));
+                let point = self.direction.axis().pack_point(placed_pos, 0.);
+                ctx.place_child(child, point);
             } else {
                 ctx.set_stashed(child, true);
             }
@@ -638,18 +621,17 @@ impl Widget for VirtualHScroll {
     }
 
     fn compose(&mut self, ctx: &mut ComposeCtx<'_>) {
-        let content_width = ctx.content_box_size().width;
-        let x = self.scroll_offset_from_anchor() - self.start_at * content_width;
-        let x = -self.direction_appropriate(x)
-            + if self.left_to_right {
-                0.
-            } else {
-                content_width
-            };
-        let translation = Vec2::new(x, 0.);
+        let content_length = ctx.content_box_size().get_coord(self.direction.axis());
+        let offset = self.scroll_offset_from_anchor() - self.start_at * content_length;
+        let offset = if self.direction.is_reverse() {
+            content_length - self.direction.appropriate(offset)
+        } else {
+            -self.direction.appropriate(offset)
+        };
+        let translation = self.direction.axis().pack_vec2(offset, 0.);
         for idx in self.active_range.clone() {
             if let Some(child) = self.items.get_mut(&idx) {
-                if self.autoscroll_velocity != 0. {
+                if self.scrolling {
                     ctx.set_animated_child_scroll_translation(child, translation);
                 } else {
                     ctx.set_child_scroll_translation(child, translation);
@@ -686,14 +668,14 @@ impl Widget for VirtualHScroll {
         if !self.action_handled {
             if self.missed_actions_count == 0 {
                 tracing::warn!(
-                    "VirtualScroll got to painting without its action (i.e. it's request for items to be loaded) being handled.\n\
+                    "VirtualHScroll got to painting without its action (i.e. it's request for items to be loaded) being handled.\n\
                     This means that there was a delay in handling its action for some reason.\n\
                     Maybe your driver only handles one action at a time?"
                 );
             }
             if self.missed_actions_count > 10 {
                 debug_panic!(
-                    "VirtualScroll's action is being missed repeatedly being handled.\n\
+                    "VirtualHScroll's action is being missed repeatedly being handled.\n\
                     Note that to handle an action, you must call `VirtualHScroll::will_handle_action` with the action."
                 );
                 // In release mode, re-send the action, which will hopefully get things unstuck.
@@ -714,32 +696,49 @@ impl Widget for VirtualHScroll {
         node: &mut accesskit::Node,
     ) {
         node.set_clips_children();
-        node.set_orientation(accesskit::Orientation::Vertical);
+        node.set_orientation(match self.direction.axis() {
+            Axis::Horizontal => accesskit::Orientation::Horizontal,
+            Axis::Vertical => accesskit::Orientation::Vertical,
+        });
         // Even when we support infinite scroll in both directions, we need
-        // to set scroll_x somehow, so the platform adapter can know when
+        // to set the scroll position somehow, so the platform adapter can know when
         // scrolling happened and fire the appropriate platform event;
         // this is particularly important on Android. Here, we assume that
         // in practice, the anchor index is in range for an f64.
         // TBD: Is there a better way to do this?
         if self.anchor_index != 0 && self.anchor_index != usize::MAX {
-            let x = (self.anchor_index as f64) * self.virtual_list.model().default_extent()
+            let pos = (self.anchor_index as f64) * self.virtual_list.model().default_extent()
                 + self.scroll_offset_from_anchor();
-            node.set_scroll_x(x);
+            match self.direction.axis() {
+                Axis::Horizontal => node.set_scroll_x(pos),
+                Axis::Vertical => node.set_scroll_y(pos),
+            }
         }
+        // not at top
         if self.anchor_index != 0 || self.scroll_offset_from_anchor() > 0. {
-            node.add_action(accesskit::Action::ScrollUp);
+            node.add_action(match self.direction {
+                ScrollDirection::TopToBottom => accesskit::Action::ScrollUp,
+                ScrollDirection::BottomToTop => accesskit::Action::ScrollDown,
+                ScrollDirection::LeftToRight => accesskit::Action::ScrollLeft,
+                ScrollDirection::RightToLeft => accesskit::Action::ScrollRight,
+            });
         }
         let last_visible_index = self.virtual_list.last_visible_index();
-        let at_end = last_visible_index.map_or(false, |i| {
-            i == self.virtual_list.model().len()
-                && self.virtual_list.model_mut().offset_at(i)
-                    + self.virtual_list.model().extent_at(i)
+        let at_end = last_visible_index.map_or(false, |index| {
+            index == self.virtual_list.model().len()
+                && self.virtual_list.model_mut().offset_at(index)
+                    + self.virtual_list.model().extent_at(index)
                     - self.virtual_list.scroll_offset()
                     - self.virtual_list.viewport_extent()
                     != 0.
         });
         if !at_end {
-            node.add_action(accesskit::Action::ScrollDown);
+            node.add_action(match self.direction {
+                ScrollDirection::TopToBottom => accesskit::Action::ScrollDown,
+                ScrollDirection::BottomToTop => accesskit::Action::ScrollUp,
+                ScrollDirection::LeftToRight => accesskit::Action::ScrollRight,
+                ScrollDirection::RightToLeft => accesskit::Action::ScrollLeft,
+            });
         }
         node.add_child_action(accesskit::Action::ScrollIntoView);
     }
@@ -770,27 +769,27 @@ impl Widget for VirtualHScroll {
     }
 }
 
-pub(crate) fn compute_pan_range(mut viewport: Range<f64>, target: Range<f64>) -> Range<f64> {
+pub(crate) fn compute_pan_range(mut viewport: Range<f64>, target: (f64, f64)) -> Range<f64> {
     // if either range contains the other, the viewport doesn't move
-    if target.start <= viewport.start && viewport.end <= target.end {
+    if target.0 <= viewport.start && viewport.end <= target.1 {
         return viewport;
     }
-    if viewport.start <= target.start && target.end <= viewport.end {
+    if viewport.start <= target.0 && target.1 <= viewport.end {
         return viewport;
     }
 
     // we compute the length that we need to "fit" in our viewport
-    let target_width = f64::min(viewport.end - viewport.start, target.end - target.start);
-    let viewport_width = viewport.end - viewport.start;
+    let target_length = (viewport.end - viewport.start).min(target.1 - target.0);
+    let viewport_length = viewport.end - viewport.start;
 
     // Because of the early returns, there are only two cases to consider: we need
     // to move the viewport "left" or "right"
-    if viewport.start >= target.start {
-        viewport.start = target.end - target_width;
-        viewport.end = viewport.start + viewport_width;
+    if viewport.start >= target.0 {
+        viewport.start = target.1 - target_length;
+        viewport.end = viewport.start + viewport_length;
     } else {
-        viewport.end = target.start + target_width;
-        viewport.start = viewport.end - viewport_width;
+        viewport.end = target.0 + target_length;
+        viewport.start = viewport.end - viewport_length;
     }
 
     viewport

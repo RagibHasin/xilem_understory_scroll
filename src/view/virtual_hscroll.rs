@@ -12,6 +12,8 @@ use xilem::{Pod, ViewCtx, WidgetView};
 
 use crate::widgets;
 
+pub use widgets::ScrollDirection;
+
 /// The view type for [`virtual_hscroll`].
 ///
 /// See its documentation for details.
@@ -23,12 +25,12 @@ pub struct VirtualHScroll<State, Action, ChildrenViews, F, G> {
     len: usize,
     start_at: f64,
     end_at: f64,
-    left_to_right: bool,
-    autoscroll_velocity: f64,
+    direction: ScrollDirection,
+    scrolling: bool,
     on_scroll: G,
 }
 
-/// A (vertical) virtual scrolling View, for Masonry's [`VirtualScroll`](widgets::VirtualHScroll).
+/// A (vertical) virtual scrolling View, for Masonry's [`VirtualHScroll`](widgets::VirtualHScroll).
 ///
 /// Virtual scrolling is a technique to improve performance when scrolling through long lists, by
 /// only loading (and therefore laying out, drawing, processing for event handling), the items visible to the user.
@@ -53,7 +55,7 @@ pub struct VirtualHScroll<State, Action, ChildrenViews, F, G> {
 /// As such, you should avoid panicking if the index is outside of a range you expect, and you are
 /// changing the valid range. We expect this limitation to be lifted in the future.
 ///
-/// For full details, see the documentation on the [view type](VirtualScroll).
+/// For full details, see the documentation on the [view type](VirtualHScroll).
 pub fn virtual_hscroll<State, Action, ChildrenViews, F>(
     len: usize,
     func: F,
@@ -77,19 +79,19 @@ where
         len,
         start_at: 0.,
         end_at: 1.,
-        left_to_right: true,
-        autoscroll_velocity: 0.,
+        direction: ScrollDirection::TopToBottom,
+        scrolling: false,
         on_scroll: private::do_nothing::<State, Action>,
     }
 }
 
-/// Component for a [`VirtualScroll`] with unlimited children.
+/// Component for a [`VirtualHScroll`] with unlimited children.
 ///
 /// Arguments:
 /// - `func` is the component for this element's children.
 ///   It is provided with the app's state and the index of the child.
 ///
-/// For full details, see the documentation on the [view type](VirtualScroll).
+/// For full details, see the documentation on the [view type](VirtualHScroll).
 pub fn unlimited_virtual_hscroll<State, Action, ChildrenViews, F>(
     func: F,
 ) -> VirtualHScroll<
@@ -112,8 +114,8 @@ where
         len: usize::MAX,
         start_at: 0.,
         end_at: 1.,
-        left_to_right: true,
-        autoscroll_velocity: 0.,
+        direction: ScrollDirection::TopToBottom,
+        scrolling: false,
         on_scroll: private::do_nothing::<State, Action>,
     }
 }
@@ -131,13 +133,14 @@ impl<State, Action, ChildrenViews, F, G> VirtualHScroll<State, Action, ChildrenV
         self.end_at = end_at;
         self
     }
-    pub fn left_to_right(mut self, left_to_right: bool) -> Self {
-        self.left_to_right = left_to_right;
+
+    pub fn direction(mut self, direction: ScrollDirection) -> Self {
+        self.direction = direction;
         self
     }
 
-    pub fn autoscroll_velocity(mut self, autoscroll_velocity: f64) -> Self {
-        self.autoscroll_velocity = autoscroll_velocity;
+    pub fn scrolling(mut self, scrolling: bool) -> Self {
+        self.scrolling = scrolling;
         self
     }
 
@@ -149,8 +152,8 @@ impl<State, Action, ChildrenViews, F, G> VirtualHScroll<State, Action, ChildrenV
             len: self.len,
             start_at: self.start_at,
             end_at: self.end_at,
-            left_to_right: self.left_to_right,
-            autoscroll_velocity: self.autoscroll_velocity,
+            direction: self.direction,
+            scrolling: self.scrolling,
             on_scroll,
         }
     }
@@ -172,7 +175,7 @@ mod private {
         unnameable_types,
         reason = "Not meaningful public API; required to be public due to design of View trait"
     )]
-    pub struct VirtualScrollState<View, State> {
+    pub struct VirtualHScrollState<View, State> {
         pub(super) pending_action: Option<super::widgets::VirtualHScrollFetchAction>,
         pub(super) children: HashMap<usize, ChildState<View, State>>,
     }
@@ -208,7 +211,7 @@ where
 {
     type Element = Pod<widgets::VirtualHScroll>;
 
-    type ViewState = private::VirtualScrollState<ChildrenViews, ChildrenViews::ViewState>;
+    type ViewState = private::VirtualHScrollState<ChildrenViews, ChildrenViews::ViewState>;
 
     fn build(&self, ctx: &mut ViewCtx, _: &mut State) -> (Self::Element, Self::ViewState) {
         // TODO: How does the anchor interact with Xilem?
@@ -216,13 +219,13 @@ where
         let pod = Pod::new(
             widgets::VirtualHScroll::new(self.anchor_index.unwrap_or(0), self.len)
                 .with_start_end(self.start_at, self.end_at)
-                .with_direction(self.left_to_right)
-                .with_autoscroll_velocity(self.autoscroll_velocity),
+                .with_direction(self.direction)
+                .with_scrolling(self.scrolling),
         );
         ctx.record_action_source(pod.new_widget.id());
         (
             pod,
-            private::VirtualScrollState {
+            private::VirtualHScrollState {
                 pending_action: None,
                 children: HashMap::default(),
             },
@@ -258,17 +261,14 @@ where
             widgets::VirtualHScroll::set_end(&mut element, self.end_at);
         }
 
-        let direction_changed = self.left_to_right != prev.left_to_right;
+        let direction_changed = self.direction != prev.direction;
         if direction_changed {
-            widgets::VirtualHScroll::set_direction(&mut element, self.left_to_right);
+            widgets::VirtualHScroll::set_direction(&mut element, self.direction);
         }
 
-        let autoscroll_velocity_changed = self.autoscroll_velocity != prev.autoscroll_velocity;
-        if autoscroll_velocity_changed {
-            widgets::VirtualHScroll::set_autoscroll_velocity(
-                &mut element,
-                self.autoscroll_velocity,
-            );
+        let scrolling_changed = self.scrolling != prev.scrolling;
+        if scrolling_changed {
+            widgets::VirtualHScroll::set_scrolling(&mut element, self.scrolling);
         }
 
         // TODO: This code should be moved into `Self::message` once it becomes possible to
@@ -358,7 +358,7 @@ where
         debug_assert_eq!(
             element.widget.len(),
             view_state.children.len(),
-            "VirtualScroll: Child added outside of the control of Xilem."
+            "VirtualHScroll: Child added outside of the control of Xilem."
         );
     }
 
@@ -403,7 +403,7 @@ where
                 return result;
             } else {
                 tracing::error!(
-                    "Message sent to unloaded view in `VirtualScroll::message`: {message:?}"
+                    "Message sent to unloaded view in `VirtualHScroll::message`: {message:?}"
                 );
                 return MessageResult::Stale;
             }
@@ -422,7 +422,7 @@ where
                 }) => (self.on_scroll)(app_state, range_in_viewport),
             }
         } else {
-            tracing::error!(?message, "Wrong message type in VirtualScroll::message");
+            tracing::error!(?message, "Wrong message type in VirtualHScroll::message");
             MessageResult::Stale
         }
     }
